@@ -63,18 +63,28 @@ function buildSignet(){
   // Shared vertices around both loops also keep the lighting smooth at every join.
   for(let i=0;i<A;i++){
     const t=-Math.PI+i/A*Math.PI*2,c=Math.cos(t),s=Math.sin(t);
-    const upper=smooth((c+.15)/1.0);
-    const squareRadius=1/Math.pow(Math.pow(Math.abs(s)/9,4)+Math.pow(Math.abs(c)/9.7,4),.25);
-    const outer=8.1+(squareRadius-8.1)*upper,w=2.1+3.4*upper;
+    const shoulder=smooth((c+.20)/1.20);
+    const tableBlend=1-smooth((Math.abs(t)-.46)/.25);
+    const bodyOuter=8.15+1.15*shoulder;
+    const flatOuter=10.25/Math.max(c,.4);
+    const outer=bodyOuter+(flatOuter-bodyOuter)*tableBlend;
+    const topX=s*outer,tableRadius=6.2;
+    const diskHalf=Math.sqrt(Math.max(0,tableRadius*tableRadius-Math.min(tableRadius,Math.abs(topX))**2));
+    const bodyWidth=2.0+1.5*shoulder;
+    const tableWidth=Math.max(.65,diskHalf);
+    const w=bodyWidth+(tableWidth-bodyWidth)*tableBlend;
     const mid=(outer+inner)/2,thickness=(outer-inner)/2;
     for(let j=0;j<B;j++){
       const q=j/B*Math.PI*2,cq=Math.cos(q),sq=Math.sin(q);
-      const r=mid+thickness*Math.sign(cq)*Math.sqrt(Math.abs(cq));
+      const radialExponent=.5-.22*tableBlend;
+      const r=mid+thickness*Math.sign(cq)*Math.pow(Math.abs(cq),radialExponent);
       const z=w*Math.sign(sq)*Math.sqrt(Math.abs(sq));
       let x=s*r,y=c*r;
-      const blend=(1-smooth((Math.abs(t)-.30)/.68))*smooth(cq/.65);
+      const diskDistance=Math.hypot(x/tableRadius,z/tableRadius);
+      const diskFade=1-smooth((diskDistance-.78)/.22);
+      const blend=tableBlend*smooth(cq/.65)*diskFade;
       if(blend>0){
-        const u=Math.max(-1,Math.min(1,x/7.5)),v=z/5.5;
+        const u=Math.max(-1,Math.min(1,x/tableRadius)),v=Math.max(-1,Math.min(1,z/tableRadius));
         let d=terrain(u/Math.SQRT2,v/Math.SQRT2)*blend;
         // Smoothly limit deep valleys before they reach the finger opening.
         const floor=Math.sqrt(Math.max(0,(inner+.65)**2-x*x));
