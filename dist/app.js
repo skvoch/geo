@@ -25,8 +25,41 @@ scene.add(new THREE.HemisphereLight(0xffffff,0x647080,2.8));
 for(const [x,y,z,power,color] of [[-18,28,26,850,0xffffff],[22,14,-18,620,0xb9caff],[0,-8,22,320,0xffead2]]){const light=new THREE.PointLight(color,power);light.position.set(x,y,z);scene.add(light);}
 let model=new THREE.Group();scene.add(model);
 let data=null,loaded=null,job=0;
-const material=new THREE.MeshPhysicalMaterial({color:0xc7cbd2,metalness:1,roughness:.14,clearcoat:.28,clearcoatRoughness:.08,envMapIntensity:1.68,side:THREE.DoubleSide});
+const material=new THREE.MeshPhysicalMaterial({color:0xd7d9df,metalness:1,roughness:.17,clearcoat:.02,clearcoatRoughness:.2,envMapIntensity:1.58,side:THREE.FrontSide});
 let ringBody=null,ringBounds=null;
+function subdivideTop(source,levels=2){
+  const geometry=source.index?source.toNonIndexed():source.clone();
+  if(!geometry.attributes.normal)geometry.computeVertexNormals();
+  const positions=geometry.attributes.position,normals=geometry.attributes.normal,outPositions=[],outNormals=[];
+  const groups=new Map(),normalList=[];
+  for(let i=0;i<positions.count;i++){
+    const p=new THREE.Vector3().fromBufferAttribute(positions,i),key=`${Math.round(p.x*10000)}/${Math.round(p.y*10000)}/${Math.round(p.z*10000)}`;
+    if(!groups.has(key))groups.set(key,[]);groups.get(key).push(i);
+    normalList.push(new THREE.Vector3().fromBufferAttribute(normals,i).normalize());
+  }
+  const averaged=new THREE.Vector3();
+  for(const indices of groups.values()){
+    if(indices.length<2)continue;
+    for(const index of indices){
+      averaged.set(0,0,0);const reference=normalList[index];
+      for(const sibling of indices)if(reference.dot(normalList[sibling])>.35)averaged.add(normalList[sibling]);
+      averaged.normalize();normals.setXYZ(index,averaged.x,averaged.y,averaged.z);
+    }
+  }
+  const emit=(a,b,c)=>{for(const vertex of [a,b,c]){outPositions.push(vertex.p.x,vertex.p.y,vertex.p.z);outNormals.push(vertex.n.x,vertex.n.y,vertex.n.z);}};
+  const midpoint=(a,b)=>({p:a.p.clone().add(b.p).multiplyScalar(.5),n:a.n.clone().add(b.n).normalize()});
+  const split=(a,b,c,depth)=>{if(!depth){emit(a,b,c);return;}const ab=midpoint(a,b),bc=midpoint(b,c),ca=midpoint(c,a);split(a,ab,ca,depth-1);split(ab,b,bc,depth-1);split(ca,bc,c,depth-1);split(ab,bc,ca,depth-1);};
+  for(let i=0;i<positions.count;i+=3){
+    const vertices=[];
+    for(let k=0;k<3;k++)vertices.push({p:new THREE.Vector3().fromBufferAttribute(positions,i+k),n:new THREE.Vector3().fromBufferAttribute(normals,i+k).normalize()});
+    split(vertices[0],vertices[1],vertices[2],levels);
+  }
+  const result=new THREE.BufferGeometry();
+  result.setAttribute('position',new THREE.Float32BufferAttribute(outPositions,3));
+  result.setAttribute('normal',new THREE.Float32BufferAttribute(outNormals,3));
+  result.computeBoundingBox();result.computeBoundingSphere();
+  return result;
+}
 const ringReady=new Promise((resolve,reject)=>{
   new FBXLoader().load('assets/Signet_Ring.fbx',object=>{
     const sourceBox=new THREE.Box3().setFromObject(object);
@@ -35,14 +68,14 @@ const ringReady=new Promise((resolve,reject)=>{
     object.position.sub(center);
     object.scale.setScalar(18/sourceSize.y);
     object.updateMatrixWorld(true);
+    const box=new THREE.Box3().setFromObject(object);
+    const size=box.getSize(new THREE.Vector3());
     object.traverse(child=>{if(child.isMesh){
-      child.geometry=child.geometry.clone();
+      child.geometry=subdivideTop(child.geometry,2);
       child.userData.basePositions=Float32Array.from(child.geometry.attributes.position.array);
       child.userData.baseNormals=Float32Array.from(child.geometry.attributes.normal.array);
       child.material=material;child.castShadow=true;child.receiveShadow=true;
     }});
-    const box=new THREE.Box3().setFromObject(object);
-    const size=box.getSize(new THREE.Vector3());
     ringBounds={top:box.max.y,halfX:size.x*.49,halfZ:size.z*.49,band:size.y*.10};
     ringBody=object;
     model.add(object);
@@ -69,18 +102,31 @@ marker.on('dragend',()=>{const p=marker.getLatLng();setPoint(p.lat,p.lng,false);
 for(const id of ['lat','lon'])$(id).oninput=()=>{pending();try{const s=selection();map.panTo([s.lat,s.lon]);scheduleLive();}catch{}};
 function paintRange(input){const min=Number(input.min)||0,max=Number(input.max)||100,value=Number(input.value);input.style.setProperty('--fill',`${(value-min)/(max-min)*100}%`);}
 $('radius').oninput=()=>{$('radiusValue').value=`${$('radius').value} км`;paintRange($('radius'));pending();scheduleLive();};
-const N=96,cache=new Map(),heightCache=new Map();
+const N=192,cache=new Map(),heightCache=new Map();
 function world(lat,lon,z){const n=2**z;const rad=lat*Math.PI/180;return [(lon+180)/360*n,(1-Math.asinh(Math.tan(rad))/Math.PI)/2*n];}
 async function tile(z,x,y){const n=2**z;x=((x%n)+n)%n;y=Math.max(0,Math.min(n-1,y));const key=`${z}/${x}/${y}`;if(cache.has(key))return cache.get(key);const p=(async()=>{const response=await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${key}.png`,{signal:AbortSignal.timeout(20000)});if(!response.ok)throw Error('Источник высот временно недоступен.');const bitmap=await createImageBitmap(await response.blob());const canvas=document.createElement('canvas');canvas.width=canvas.height=256;const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(bitmap,0,0);bitmap.close();return ctx.getImageData(0,0,256,256).data;})();cache.set(key,p);try{return await p;}catch(e){cache.delete(key);throw e;}}
 async function heights(s){const cacheKey=`${s.lat.toFixed(4)}/${s.lon.toFixed(4)}/${s.radius}`;if(heightCache.has(cacheKey))return heightCache.get(cacheKey);const dlat=s.radius/111.32,dlon=dlat/Math.cos(s.lat*Math.PI/180);if(Math.abs(s.lat)+dlat>85)throw Error('Выбери точку немного дальше от полюса.');const z=Math.max(2,Math.min(12,Math.floor(Math.log2(360/(dlon*2)))));const points=[],keys=new Map();for(let j=0;j<=N;j++)for(let i=0;i<=N;i++){const u=i/N*2-1,v=j/N*2-1;const [x,y]=world(s.lat-v*dlat,s.lon+u*dlon,z);const tx=Math.floor(x),ty=Math.floor(y),key=`${tx}/${ty}`;points.push({key,px:Math.floor((x-tx)*256),py:Math.floor((y-ty)*256)});keys.set(key,[tx,ty]);}const tiles=new Map(await Promise.all([...keys].map(async([key,[x,y]])=>[key,await tile(z,x,y)])));const result=Float32Array.from(points,p=>{const t=tiles.get(p.key),k=(p.py*256+p.px)*4;return t[k]*256+t[k+1]+t[k+2]/256-32768;});heightCache.set(cacheKey,result);if(heightCache.size>24)heightCache.delete(heightCache.keys().next().value);return result;}
-function sample(u,v){const x=Math.max(0,Math.min(N,(u+1)*N/2)),y=Math.max(0,Math.min(N,(v+1)*N/2));const i=Math.min(N-1,Math.floor(x)),j=Math.min(N-1,Math.floor(y)),a=x-i,b=y-j;return data[j*(N+1)+i]*(1-a)*(1-b)+data[j*(N+1)+i+1]*a*(1-b)+data[(j+1)*(N+1)+i]*(1-a)*b+data[(j+1)*(N+1)+i+1]*a*b;}
+function sampleField(field,u,v){const x=Math.max(0,Math.min(N,(u+1)*N/2)),y=Math.max(0,Math.min(N,(v+1)*N/2));const i=Math.min(N-1,Math.floor(x)),j=Math.min(N-1,Math.floor(y)),a=x-i,b=y-j;return field[j*(N+1)+i]*(1-a)*(1-b)+field[j*(N+1)+i+1]*a*(1-b)+field[(j+1)*(N+1)+i]*(1-a)*b+field[(j+1)*(N+1)+i+1]*a*b;}
+function sample(u,v){return sampleField(data,u,v);}
+let filteredSource=null,filteredHeights=null;
+function jewelryHeights(){
+  if(filteredSource===data)return filteredHeights;
+  const side=N+1,weights=[1,4,6,4,1],work=Float32Array.from(data),temp=new Float32Array(data.length);
+  const clamp=value=>Math.max(0,Math.min(N,value));
+  for(let pass=0;pass<4;pass++){
+    for(let y=0;y<side;y++)for(let x=0;x<side;x++){let sum=0;for(let k=-2;k<=2;k++)sum+=work[y*side+clamp(x+k)]*weights[k+2];temp[y*side+x]=sum/16;}
+    for(let y=0;y<side;y++)for(let x=0;x<side;x++){let sum=0;for(let k=-2;k<=2;k++)sum+=temp[clamp(y+k)*side+x]*weights[k+2];work[y*side+x]=sum/16;}
+  }
+  filteredSource=data;filteredHeights=work;return work;
+}
 const smooth=t=>{t=Math.max(0,Math.min(1,t));return t*t*t*(t*(t*6-15)+10);};
 function terrainField(){
+  const filtered=jewelryHeights();
   let mean=0,count=0;
-  for(let j=0;j<=32;j++)for(let i=0;i<=32;i++){const u=i/16-1,v=j/16-1;if(Math.pow(Math.abs(u),4)+Math.pow(Math.abs(v),4)<=1){mean+=sample(u/Math.SQRT2,v/Math.SQRT2);count++;}}
+  for(let j=0;j<=32;j++)for(let i=0;i<=32;i++){const u=i/16-1,v=j/16-1;if(Math.pow(Math.abs(u),4)+Math.pow(Math.abs(v),4)<=1){mean+=sampleField(filtered,u/Math.SQRT2,v/Math.SQRT2);count++;}}
   mean/=count;
-  const gain=Number($('relief').value)*14.08/(loaded.radius*2000);
-  return (u,v)=>{let sum=0;for(let j=-1;j<=1;j++)for(let i=-1;i<=1;i++)sum+=sample(u+i/N,v+j/N)*(i===0?2:1)*(j===0?2:1);const raw=(sum/16-mean)*gain;return 2.15*Math.tanh(raw/2.15);};
+  const gain=Number($('relief').value)*12.2/(loaded.radius*2000);
+  return (u,v)=>{const raw=(sampleField(filtered,u,v)-mean)*gain;return 2.05*Math.tanh(raw/2.05);};
 }
 function deformRing(){
   const terrain=terrainField(),{top,halfX,halfZ,band}=ringBounds;
@@ -103,26 +149,29 @@ function deformRing(){
     const normalMatrix=new THREE.Matrix3().getNormalMatrix(meshToModel);
     const normalToMesh=new THREE.Matrix3().getNormalMatrix(modelToMesh);
     const point=new THREE.Vector3(),normal=new THREE.Vector3(),terrainNormal=new THREE.Vector3();
-    const epsilon=.018;
+    const epsilon=4/N;
     for(let i=0;i<position.count;i++){
       point.fromArray(base,i*3).applyMatrix4(meshToModel);
       normal.fromArray(baseNormals,i*3).applyMatrix3(normalMatrix).normalize();
-      if(point.y<top-band*1.6)continue;
+      if(point.y<top-band*2.7)continue;
       const u=point.x/halfX,v=point.z/halfZ;
       const rho=Math.pow(Math.pow(Math.abs(u),4)+Math.pow(Math.abs(v),4),.25);
       let changed=false;
-      if(normal.y>=.28&&rho<1){
+      const heightWeight=smooth((point.y-(top-band*2.7))/(band*2.7));
+      const facingWeight=smooth((normal.y+.08)/.72);
+      const surfaceWeight=heightWeight*facingWeight;
+      if(surfaceWeight>.001&&rho<1){
         const edge=1-smooth((rho-.68)/.32);
-        point.y+=displacement(u,v);
-        const dx=(displacement(u+epsilon,v)-displacement(u-epsilon,v))/(2*epsilon*halfX);
-        const dz=(displacement(u,v+epsilon)-displacement(u,v-epsilon))/(2*epsilon*halfZ);
-        terrainNormal.set(-dx,1,-dz).normalize();
-        const blend=edge*smooth((normal.y-.28)/.52);
+        point.y+=displacement(u,v)*surfaceWeight;
+        const dx=(displacement(u+epsilon,v)-displacement(u-epsilon,v))/(2*epsilon*halfX)*surfaceWeight;
+        const dz=(displacement(u,v+epsilon)-displacement(u,v-epsilon))/(2*epsilon*halfZ)*surfaceWeight;
+        terrainNormal.set(-dx*.66,1,-dz*.66).normalize();
+        const blend=edge*surfaceWeight;
         normal.lerp(terrainNormal,blend).normalize();
         changed=true;
       }else if(normal.y<.55&&rho>.55&&rho<1.35){
         const projection=Math.max(1,rho/.78);
-        const shoulderHeight=smooth((point.y-(top-band*1.6))/(band*1.6));
+        const shoulderHeight=heightWeight;
         const sideWeight=1-smooth((normal.y-.05)/.50);
         const push=terrain(u/projection/Math.SQRT2,v/projection/Math.SQRT2)*.12*shoulderHeight*sideWeight;
         point.addScaledVector(normal,push);
@@ -149,7 +198,12 @@ function scheduleLive(){if($('mapPanel').hidden)return;clearTimeout(liveTimer);$
 $('load').onclick=()=>load(true);
 $('relief').oninput=()=>{$('reliefValue').value=`${Number($('relief').value).toFixed(1)}×`;paintRange($('relief'));build();};
 $('size').oninput=()=>{$('sizeValue').value=`${$('size').value}%`;paintRange($('size'));model.scale.setScalar(Number($('size').value)/100);};
-$('material').onchange=()=>{const value=$('material').value;if(value==='#76877e'){material.color.set('#6f7d76');material.metalness=.06;material.roughness=.72;material.clearcoat=.08;material.clearcoatRoughness=.18;material.envMapIntensity=.55;}else if(value==='#c4ad78'){material.color.set('#d1a13f');material.metalness=1;material.roughness=.075;material.clearcoat=.42;material.clearcoatRoughness=.035;material.envMapIntensity=2.15;}else{material.color.set('#c7cbd2');material.metalness=1;material.roughness=.14;material.clearcoat=.28;material.clearcoatRoughness=.08;material.envMapIntensity=1.68;}material.needsUpdate=true;};
+const materialPresets={
+  '#c8cdd2':{color:'#d7d9df',metalness:1,roughness:.17,clearcoat:.02,clearcoatRoughness:.20,envMapIntensity:1.58,reflectivity:.5},
+  '#c4ad78':{color:'#c59643',metalness:1,roughness:.115,clearcoat:.04,clearcoatRoughness:.16,envMapIntensity:1.76,reflectivity:.5},
+  '#76877e':{color:'#303936',metalness:.01,roughness:.76,clearcoat:.01,clearcoatRoughness:.46,envMapIntensity:.40,reflectivity:.24}
+};
+$('material').onchange=()=>{const preset=materialPresets[$('material').value]||materialPresets['#c8cdd2'];material.color.set(preset.color);material.metalness=preset.metalness;material.roughness=preset.roughness;material.clearcoat=preset.clearcoat;material.clearcoatRoughness=preset.clearcoatRoughness;material.envMapIntensity=preset.envMapIntensity;material.reflectivity=preset.reflectivity;material.needsUpdate=true;};
 $('material').value='#c8cdd2';$('material').dispatchEvent(new Event('change'));
 
 let placeName='Эльбрус',placeRegion='Кавказ, Россия';

@@ -6,4 +6,6 @@ if(!fbx.subarray(0,18).toString().startsWith('Kaydara FBX Binary'))throw Error('
 if(!app.includes('FBXLoader')||!app.includes('deformRing'))throw Error('FBX vertex deformation is missing');
 if(!app.includes('basePositions')||!app.includes('position.array.set(base)'))throw Error('original FBX vertices are not restored before deformation');
 if(app.includes('buildTerrain'))throw Error('detached terrain overlay is still present');
-console.log('PASS: FBX body found; relief deforms the original model vertices and restores them before every rebuild.');
+if(!app.includes('const N=192')||!app.includes('subdivideTop'))throw Error('high-detail terrain pipeline is missing');
+if(!app.includes('THREE.FrontSide')||!app.includes('groups=new Map()'))throw Error('continuous ring surface pipeline is missing');
+console.log('PASS: FBX body found; the continuous subdivided mesh removes normal seams and restores original vertices before every rebuild.');
