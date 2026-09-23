@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 const $=id=>document.getElementById(id);
 const scene=new THREE.Scene();
 const camera=new THREE.PerspectiveCamera(38,1,.1,500);
@@ -25,6 +26,30 @@ for(const [x,y,z,power,color] of [[-18,28,26,850,0xffffff],[22,14,-18,620,0xb9ca
 let model=new THREE.Group();scene.add(model);
 let data=null,loaded=null,job=0;
 const material=new THREE.MeshPhysicalMaterial({color:0xc7cbd2,metalness:1,roughness:.14,clearcoat:.28,clearcoatRoughness:.08,envMapIntensity:1.68,side:THREE.DoubleSide});
+let ringBody=null,ringBounds=null;
+const ringReady=new Promise((resolve,reject)=>{
+  new FBXLoader().load('assets/Signet_Ring.fbx',object=>{
+    const sourceBox=new THREE.Box3().setFromObject(object);
+    const sourceSize=sourceBox.getSize(new THREE.Vector3());
+    const center=sourceBox.getCenter(new THREE.Vector3());
+    object.position.sub(center);
+    object.scale.setScalar(18/sourceSize.y);
+    object.updateMatrixWorld(true);
+    object.traverse(child=>{if(child.isMesh){
+      child.geometry=child.geometry.clone();
+      child.userData.basePositions=Float32Array.from(child.geometry.attributes.position.array);
+      child.userData.baseNormals=Float32Array.from(child.geometry.attributes.normal.array);
+      child.material=material;child.castShadow=true;child.receiveShadow=true;
+    }});
+    const box=new THREE.Box3().setFromObject(object);
+    const size=box.getSize(new THREE.Vector3());
+    ringBounds={top:box.max.y,halfX:size.x*.49,halfZ:size.z*.49,band:size.y*.10};
+    ringBody=object;
+    model.add(object);
+    if(data)build();
+    resolve(object);
+  },undefined,error=>reject(Error('Не удалось открыть модель кольца: '+error.message)));
+});
 function reset(){camera.position.set(23,23,36);controls.target.set(0,2,0);controls.update();}
 reset();$('reset').onclick=reset;
 new ResizeObserver(()=>{const r=$('viewport').getBoundingClientRect();renderer.setSize(r.width,r.height);camera.aspect=r.width/r.height;camera.updateProjectionMatrix();}).observe($('viewport'));
@@ -49,60 +74,76 @@ function world(lat,lon,z){const n=2**z;const rad=lat*Math.PI/180;return [(lon+18
 async function tile(z,x,y){const n=2**z;x=((x%n)+n)%n;y=Math.max(0,Math.min(n-1,y));const key=`${z}/${x}/${y}`;if(cache.has(key))return cache.get(key);const p=(async()=>{const response=await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${key}.png`,{signal:AbortSignal.timeout(20000)});if(!response.ok)throw Error('Источник высот временно недоступен.');const bitmap=await createImageBitmap(await response.blob());const canvas=document.createElement('canvas');canvas.width=canvas.height=256;const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(bitmap,0,0);bitmap.close();return ctx.getImageData(0,0,256,256).data;})();cache.set(key,p);try{return await p;}catch(e){cache.delete(key);throw e;}}
 async function heights(s){const cacheKey=`${s.lat.toFixed(4)}/${s.lon.toFixed(4)}/${s.radius}`;if(heightCache.has(cacheKey))return heightCache.get(cacheKey);const dlat=s.radius/111.32,dlon=dlat/Math.cos(s.lat*Math.PI/180);if(Math.abs(s.lat)+dlat>85)throw Error('Выбери точку немного дальше от полюса.');const z=Math.max(2,Math.min(12,Math.floor(Math.log2(360/(dlon*2)))));const points=[],keys=new Map();for(let j=0;j<=N;j++)for(let i=0;i<=N;i++){const u=i/N*2-1,v=j/N*2-1;const [x,y]=world(s.lat-v*dlat,s.lon+u*dlon,z);const tx=Math.floor(x),ty=Math.floor(y),key=`${tx}/${ty}`;points.push({key,px:Math.floor((x-tx)*256),py:Math.floor((y-ty)*256)});keys.set(key,[tx,ty]);}const tiles=new Map(await Promise.all([...keys].map(async([key,[x,y]])=>[key,await tile(z,x,y)])));const result=Float32Array.from(points,p=>{const t=tiles.get(p.key),k=(p.py*256+p.px)*4;return t[k]*256+t[k+1]+t[k+2]/256-32768;});heightCache.set(cacheKey,result);if(heightCache.size>24)heightCache.delete(heightCache.keys().next().value);return result;}
 function sample(u,v){const x=Math.max(0,Math.min(N,(u+1)*N/2)),y=Math.max(0,Math.min(N,(v+1)*N/2));const i=Math.min(N-1,Math.floor(x)),j=Math.min(N-1,Math.floor(y)),a=x-i,b=y-j;return data[j*(N+1)+i]*(1-a)*(1-b)+data[j*(N+1)+i+1]*a*(1-b)+data[(j+1)*(N+1)+i]*(1-a)*b+data[(j+1)*(N+1)+i+1]*a*b;}
-function mesh(positions,indices){const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));g.setIndex(indices);g.computeVertexNormals();model.add(new THREE.Mesh(g,material));}
-function buildSignet(){
-  const A=384,B=192,inner=6.7,positions=[],indices=[];
-  const smooth=t=>{t=Math.max(0,Math.min(1,t));return t*t*t*(t*(t*6-15)+10);};
-  // Use the actual top patch's mean: valleys cut into the body, peaks rise above it.
-  let mean=0;
-  for(let j=0;j<=32;j++)for(let i=0;i<=32;i++)mean+=sample((i/16-1)/Math.SQRT2,(j/16-1)/Math.SQRT2);
-  mean/=33*33;
+const smooth=t=>{t=Math.max(0,Math.min(1,t));return t*t*t*(t*(t*6-15)+10);};
+function terrainField(){
+  let mean=0,count=0;
+  for(let j=0;j<=32;j++)for(let i=0;i<=32;i++){const u=i/16-1,v=j/16-1;if(Math.pow(Math.abs(u),4)+Math.pow(Math.abs(v),4)<=1){mean+=sample(u/Math.SQRT2,v/Math.SQRT2);count++;}}
+  mean/=count;
   const gain=Number($('relief').value)*14.08/(loaded.radius*2000);
-  function terrain(u,v){let sum=0;for(let j=-1;j<=1;j++)for(let i=-1;i<=1;i++)sum+=sample(u+i/N,v+j/N)*(i===0?2:1)*(j===0?2:1);return (sum/16-mean)*gain;}
-  // A closed, rounded cross-section joins the top, shoulders and finger opening.
-  // Shared vertices around both loops also keep the lighting smooth at every join.
-  for(let i=0;i<A;i++){
-    const t=-Math.PI+i/A*Math.PI*2,c=Math.cos(t),s=Math.sin(t);
-    const shoulder=smooth((c+.20)/1.20);
-    const tableBlend=1-smooth((Math.abs(t)-.46)/.25);
-    const bodyOuter=8.15+1.15*shoulder;
-    const flatOuter=10.25/Math.max(c,.4);
-    const outer=bodyOuter+(flatOuter-bodyOuter)*tableBlend;
-    const topX=s*outer,tableRadius=6.2;
-    const diskHalf=Math.sqrt(Math.max(0,tableRadius*tableRadius-Math.min(tableRadius,Math.abs(topX))**2));
-    const bodyWidth=2.0+1.5*shoulder;
-    const tableWidth=Math.max(.65,diskHalf);
-    const w=bodyWidth+(tableWidth-bodyWidth)*tableBlend;
-    const mid=(outer+inner)/2,thickness=(outer-inner)/2;
-    for(let j=0;j<B;j++){
-      const q=j/B*Math.PI*2,cq=Math.cos(q),sq=Math.sin(q);
-      const radialExponent=.5-.22*tableBlend;
-      const r=mid+thickness*Math.sign(cq)*Math.pow(Math.abs(cq),radialExponent);
-      const z=w*Math.sign(sq)*Math.sqrt(Math.abs(sq));
-      let x=s*r,y=c*r;
-      const diskDistance=Math.hypot(x/tableRadius,z/tableRadius);
-      const diskFade=1-smooth((diskDistance-.78)/.22);
-      const blend=tableBlend*smooth(cq/.65)*diskFade;
-      if(blend>0){
-        const u=Math.max(-1,Math.min(1,x/tableRadius)),v=Math.max(-1,Math.min(1,z/tableRadius));
-        let d=terrain(u/Math.SQRT2,v/Math.SQRT2)*blend;
-        // Smoothly limit deep valleys before they reach the finger opening.
-        const floor=Math.sqrt(Math.max(0,(inner+.65)**2-x*x));
-        const room=Math.max(.05,y-floor);
-        if(d<0)d=room*Math.tanh(d/room);
-        y+=d;
-      }
-      positions.push(x,y,z);
-      const a=i*B+j,b=((i+1)%A)*B+j,an=i*B+(j+1)%B,bn=((i+1)%A)*B+(j+1)%B;
-      indices.push(a,an,b,b,an,bn);
-    }
-  }
-  mesh(positions,indices);
+  return (u,v)=>{let sum=0;for(let j=-1;j<=1;j++)for(let i=-1;i<=1;i++)sum+=sample(u+i/N,v+j/N)*(i===0?2:1)*(j===0?2:1);const raw=(sum/16-mean)*gain;return 2.15*Math.tanh(raw/2.15);};
 }
-function build(){if(!data)return;for(const child of [...model.children]){child.geometry.dispose();model.remove(child);}const low=Math.min(...data),high=Math.max(...data);
-buildSignet();
-model.scale.setScalar(Number($('size').value)/100);$('stats').textContent=`${loaded.lat.toFixed(4)}, ${loaded.lon.toFixed(4)} · Радиус ${loaded.radius} км · Высоты ${Math.round(low)}–${Math.round(high)} м`;}
-async function load(openDetails=false,silent=false){const id=++job;let s;try{s=selection();}catch(e){$('status').textContent=e.message;return;}$('load').disabled=true;if(!silent)$('stageLoading').hidden=false;$('status').textContent=silent?'Обновляем рельеф…':'Загружаем настоящие высоты и создаём кольцо…';try{const result=await heights(s);if(id!==job)return;data=result;loaded=s;build();applyPlace();$('stageLoading').hidden=true;$('status').textContent='Кольцо обновлено. Можно продолжать выбирать точку.';if(openDetails)showStep('details');const now=selection();if(JSON.stringify(now)!==JSON.stringify(s))pending();}catch(e){if(id===job){$('stageLoading').hidden=true;$('status').textContent=`${data?'Предыдущее кольцо сохранено. ':''}Не удалось загрузить рельеф: ${e.message} Попробуй ещё раз.`;}}finally{if(id===job)$('load').disabled=false;}}
+function deformRing(){
+  const terrain=terrainField(),{top,halfX,halfZ,band}=ringBounds;
+  const displacement=(u,v)=>{
+    const rho=Math.pow(Math.pow(Math.abs(u),4)+Math.pow(Math.abs(v),4),.25);
+    if(rho>=1)return 0;
+    const edge=1-smooth((rho-.68)/.32);
+    return terrain(u/Math.SQRT2,v/Math.SQRT2)*edge;
+  };
+  model.updateMatrixWorld(true);
+  const worldToModel=model.matrixWorld.clone().invert();
+  ringBody.traverse(child=>{if(!child.isMesh)return;
+    const position=child.geometry.attributes.position,base=child.userData.basePositions,baseNormals=child.userData.baseNormals;
+    const normals=child.geometry.attributes.normal;
+    position.array.set(base);
+    normals.array.set(baseNormals);
+    child.updateWorldMatrix(true,false);
+    const meshToModel=new THREE.Matrix4().multiplyMatrices(worldToModel,child.matrixWorld);
+    const modelToMesh=meshToModel.clone().invert();
+    const normalMatrix=new THREE.Matrix3().getNormalMatrix(meshToModel);
+    const normalToMesh=new THREE.Matrix3().getNormalMatrix(modelToMesh);
+    const point=new THREE.Vector3(),normal=new THREE.Vector3(),terrainNormal=new THREE.Vector3();
+    const epsilon=.018;
+    for(let i=0;i<position.count;i++){
+      point.fromArray(base,i*3).applyMatrix4(meshToModel);
+      normal.fromArray(baseNormals,i*3).applyMatrix3(normalMatrix).normalize();
+      if(point.y<top-band*1.6)continue;
+      const u=point.x/halfX,v=point.z/halfZ;
+      const rho=Math.pow(Math.pow(Math.abs(u),4)+Math.pow(Math.abs(v),4),.25);
+      let changed=false;
+      if(normal.y>=.28&&rho<1){
+        const edge=1-smooth((rho-.68)/.32);
+        point.y+=displacement(u,v);
+        const dx=(displacement(u+epsilon,v)-displacement(u-epsilon,v))/(2*epsilon*halfX);
+        const dz=(displacement(u,v+epsilon)-displacement(u,v-epsilon))/(2*epsilon*halfZ);
+        terrainNormal.set(-dx,1,-dz).normalize();
+        const blend=edge*smooth((normal.y-.28)/.52);
+        normal.lerp(terrainNormal,blend).normalize();
+        changed=true;
+      }else if(normal.y<.55&&rho>.55&&rho<1.35){
+        const projection=Math.max(1,rho/.78);
+        const shoulderHeight=smooth((point.y-(top-band*1.6))/(band*1.6));
+        const sideWeight=1-smooth((normal.y-.05)/.50);
+        const push=terrain(u/projection/Math.SQRT2,v/projection/Math.SQRT2)*.12*shoulderHeight*sideWeight;
+        point.addScaledVector(normal,push);
+        changed=Math.abs(push)>.0001;
+      }
+      if(!changed)continue;
+      normal.applyMatrix3(normalToMesh).normalize();
+      point.applyMatrix4(modelToMesh);
+      position.setXYZ(i,point.x,point.y,point.z);
+      normals.setXYZ(i,normal.x,normal.y,normal.z);
+    }
+    position.needsUpdate=true;
+    normals.needsUpdate=true;
+    child.geometry.computeBoundingBox();
+    child.geometry.computeBoundingSphere();
+  });
+}
+function build(){if(!data||!ringBody||!ringBounds)return;const low=Math.min(...data),high=Math.max(...data);
+deformRing();
+model.scale.setScalar(Number($('size').value)/100);$('stats').textContent=loaded.lat.toFixed(4)+', '+loaded.lon.toFixed(4)+' · Радиус '+loaded.radius+' км · Высоты '+Math.round(low)+'–'+Math.round(high)+' м';}
+async function load(openDetails=false,silent=false){const id=++job;let s;try{s=selection();}catch(e){$('status').textContent=e.message;return;}$('load').disabled=true;if(!silent)$('stageLoading').hidden=false;$('status').textContent=silent?'Обновляем рельеф…':'Загружаем настоящие высоты и создаём кольцо…';try{const result=await heights(s);await ringReady;if(id!==job)return;data=result;loaded=s;build();applyPlace();$('stageLoading').hidden=true;$('status').textContent='Кольцо обновлено. Можно продолжать выбирать точку.';if(openDetails)showStep('details');const now=selection();if(JSON.stringify(now)!==JSON.stringify(s))pending();}catch(e){if(id===job){$('stageLoading').hidden=true;$('status').textContent=`${data?'Предыдущее кольцо сохранено. ':''}Не удалось загрузить рельеф: ${e.message} Попробуй ещё раз.`;}}finally{if(id===job)$('load').disabled=false;}}
 let liveTimer;
 function scheduleLive(){if($('mapPanel').hidden)return;clearTimeout(liveTimer);$('status').textContent='Точка изменена — готовим новый рельеф…';liveTimer=setTimeout(()=>load(false,true),320);}
 $('load').onclick=()=>load(true);
