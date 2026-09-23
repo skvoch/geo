@@ -8,4 +8,5 @@ if(!app.includes('basePositions')||!app.includes('position.array.set(base)'))thr
 if(app.includes('buildTerrain'))throw Error('detached terrain overlay is still present');
 if(!app.includes('const N=192')||!app.includes('subdivideTop'))throw Error('high-detail terrain pipeline is missing');
 if(!app.includes('THREE.FrontSide')||!app.includes('groups=new Map()'))throw Error('continuous ring surface pipeline is missing');
-console.log('PASS: FBX body found; the continuous subdivided mesh removes normal seams and restores original vertices before every rebuild.');
+if(!app.includes('morphAttributes.position')||!app.includes('applyRelief'))throw Error('GPU relief control is missing');
+console.log('PASS: FBX body found; the continuous mesh uses GPU morphing for instant relief control.');

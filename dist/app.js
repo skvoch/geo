@@ -74,7 +74,7 @@ const ringReady=new Promise((resolve,reject)=>{
       child.geometry=subdivideTop(child.geometry,2);
       child.userData.basePositions=Float32Array.from(child.geometry.attributes.position.array);
       child.userData.baseNormals=Float32Array.from(child.geometry.attributes.normal.array);
-      child.material=material;child.castShadow=true;child.receiveShadow=true;
+      child.material=material;child.castShadow=true;child.receiveShadow=true;child.frustumCulled=false;
     }});
     ringBounds={top:box.max.y,halfX:size.x*.49,halfZ:size.z*.49,band:size.y*.10};
     ringBody=object;
@@ -120,16 +120,16 @@ function jewelryHeights(){
   filteredSource=data;filteredHeights=work;return work;
 }
 const smooth=t=>{t=Math.max(0,Math.min(1,t));return t*t*t*(t*(t*6-15)+10);};
-function terrainField(){
+function terrainField(relief=Number($('relief').value)){
   const filtered=jewelryHeights();
   let mean=0,count=0;
   for(let j=0;j<=32;j++)for(let i=0;i<=32;i++){const u=i/16-1,v=j/16-1;if(Math.pow(Math.abs(u),4)+Math.pow(Math.abs(v),4)<=1){mean+=sampleField(filtered,u/Math.SQRT2,v/Math.SQRT2);count++;}}
   mean/=count;
-  const gain=Number($('relief').value)*12.2/(loaded.radius*2000);
+  const gain=relief*12.2/(loaded.radius*2000);
   return (u,v)=>{const raw=(sampleField(filtered,u,v)-mean)*gain;return 2.05*Math.tanh(raw/2.05);};
 }
 function deformRing(){
-  const terrain=terrainField(),{top,halfX,halfZ,band}=ringBounds;
+  const referenceRelief=Number($('relief').max)||3,terrain=terrainField(referenceRelief),{top,halfX,halfZ,band}=ringBounds;
   const displacement=(u,v)=>{
     const rho=Math.pow(Math.pow(Math.abs(u),4)+Math.pow(Math.abs(v),4),.25);
     if(rho>=1)return 0;
@@ -183,20 +183,28 @@ function deformRing(){
       position.setXYZ(i,point.x,point.y,point.z);
       normals.setXYZ(i,normal.x,normal.y,normal.z);
     }
-    position.needsUpdate=true;
-    normals.needsUpdate=true;
-    child.geometry.computeBoundingBox();
-    child.geometry.computeBoundingSphere();
+    let morphPosition=child.geometry.morphAttributes.position?.[0],morphNormal=child.geometry.morphAttributes.normal?.[0],created=false;
+    if(!morphPosition){morphPosition=new THREE.Float32BufferAttribute(new Float32Array(position.array.length),3);morphNormal=new THREE.Float32BufferAttribute(new Float32Array(normals.array.length),3);child.geometry.morphAttributes.position=[morphPosition];child.geometry.morphAttributes.normal=[morphNormal];child.geometry.morphTargetsRelative=true;created=true;}
+    for(let i=0;i<position.array.length;i++){morphPosition.array[i]=position.array[i]-base[i];morphNormal.array[i]=normals.array[i]-baseNormals[i];}
+    morphPosition.needsUpdate=true;morphNormal.needsUpdate=true;
+    position.array.set(base);normals.array.set(baseNormals);position.needsUpdate=true;normals.needsUpdate=true;
+    if(created)child.updateMorphTargets();
   });
+}
+let appliedRelief=null;
+function applyRelief(){
+  const influence=Number($('relief').value)/(Number($('relief').max)||3);
+  ringBody?.traverse(child=>{if(child.isMesh&&child.morphTargetInfluences)child.morphTargetInfluences[0]=influence;});
+  appliedRelief=$('relief').value;
 }
 function build(){if(!data||!ringBody||!ringBounds)return;const low=Math.min(...data),high=Math.max(...data);
 deformRing();
-model.scale.setScalar(Number($('size').value)/100);$('stats').textContent=loaded.lat.toFixed(4)+', '+loaded.lon.toFixed(4)+' · Радиус '+loaded.radius+' км · Высоты '+Math.round(low)+'–'+Math.round(high)+' м';}
+applyRelief();model.scale.setScalar(Number($('size').value)/100);$('stats').textContent=loaded.lat.toFixed(4)+', '+loaded.lon.toFixed(4)+' · Радиус '+loaded.radius+' км · Высоты '+Math.round(low)+'–'+Math.round(high)+' м';}
 async function load(openDetails=false,silent=false){const id=++job;let s;try{s=selection();}catch(e){$('status').textContent=e.message;return;}$('load').disabled=true;if(!silent)$('stageLoading').hidden=false;$('status').textContent=silent?'Обновляем рельеф…':'Загружаем настоящие высоты и создаём кольцо…';try{const result=await heights(s);await ringReady;if(id!==job)return;data=result;loaded=s;build();applyPlace();$('stageLoading').hidden=true;$('status').textContent='Кольцо обновлено. Можно продолжать выбирать точку.';if(openDetails)showStep('details');const now=selection();if(JSON.stringify(now)!==JSON.stringify(s))pending();}catch(e){if(id===job){$('stageLoading').hidden=true;$('status').textContent=`${data?'Предыдущее кольцо сохранено. ':''}Не удалось загрузить рельеф: ${e.message} Попробуй ещё раз.`;}}finally{if(id===job)$('load').disabled=false;}}
 let liveTimer;
 function scheduleLive(){if($('mapPanel').hidden)return;clearTimeout(liveTimer);$('status').textContent='Точка изменена — готовим новый рельеф…';liveTimer=setTimeout(()=>load(false,true),320);}
 $('load').onclick=()=>load(true);
-$('relief').oninput=()=>{$('reliefValue').value=`${Number($('relief').value).toFixed(1)}×`;paintRange($('relief'));build();};
+$('relief').oninput=()=>{$('reliefValue').value=`${Number($('relief').value).toFixed(1)}×`;paintRange($('relief'));applyRelief();$('status').textContent='Характер рельефа обновлён.';};
 $('size').oninput=()=>{$('sizeValue').value=`${$('size').value}%`;paintRange($('size'));model.scale.setScalar(Number($('size').value)/100);};
 const materialPresets={
   '#c8cdd2':{color:'#d7d9df',metalness:1,roughness:.17,clearcoat:.02,clearcoatRoughness:.20,envMapIntensity:1.58,reflectivity:.5},
