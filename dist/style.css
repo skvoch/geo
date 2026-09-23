@@ -78,3 +78,13 @@ input[type="range"]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 4px rgb
 /* Purchase and callback form */
 .purchase{display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:end;border-top:1px solid var(--line);padding-top:24px;margin-top:8px}.purchase>div{display:grid;gap:5px}.purchase>div span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}.purchase strong{font-family:Manrope,Arial,sans-serif;font-size:30px;white-space:nowrap;letter-spacing:-1.2px}.purchase .primary{min-width:170px}.order-summary{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:28px 0;padding:15px 0;border-block:1px solid var(--line);font-size:12px;color:var(--muted)}.order-summary span+span::before{content:'/';margin-right:10px;color:#a1a2ae}.order-summary strong{margin-left:auto;color:#292936;font-size:17px}.order-form{display:grid;gap:17px}.order-form label{display:grid;gap:7px;font-size:12px;color:var(--muted)}.order-form input,.order-form select,.order-form textarea{width:100%;border:0;border-bottom:1px solid rgba(80,82,108,.38);border-radius:0;background:transparent;color:#292936;padding:10px 0;font-size:16px;outline:none;resize:vertical}.order-form input:focus,.order-form select:focus,.order-form textarea:focus{border-color:var(--blue);box-shadow:0 5px 0 -4px rgba(63,72,206,.35)}.order-form .primary{margin-top:6px}.order-success{text-align:center;padding:22px 0;animation:panel-in .45s ease both}.order-success>span{display:grid;place-items:center;width:52px;height:52px;margin:0 auto 17px;border-radius:50%;background:var(--blue);color:white;font-size:24px}.order-success h3{font-size:26px;margin:0 0 10px}.order-success p{font-size:13px;line-height:1.65;color:var(--muted)}
 @media(max-width:420px){.purchase{grid-template-columns:1fr}.purchase .primary{min-width:0}.order-summary strong{width:100%;margin-top:5px}}
+
+/* Keep the product visible while configuring it on a phone. */
+@media(max-width:700px){
+body:not([data-step="intro"]) .stage{position:sticky;top:0;z-index:20;height:clamp(220px,34svh,280px);min-height:220px;background-color:#d9dce9;border-bottom:1px solid rgba(91,93,119,.16);box-shadow:0 14px 30px rgba(48,50,82,.12)}
+body:not([data-step="intro"]) .stage-meta{top:14px;left:18px;right:18px}
+body:not([data-step="intro"]) .stage-word{top:9%;font-size:clamp(38px,11vw,62px)}
+body:not([data-step="intro"]) #viewport{inset:0}
+body:not([data-step="intro"]) .stage-bottom,body:not([data-step="intro"]) .rotate-hint{display:none}
+body:not([data-step="intro"]) .configuration{scroll-margin-top:calc(clamp(220px,34svh,280px) + 12px)}
+}
