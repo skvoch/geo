@@ -94,12 +94,14 @@ L.control.zoom({position:'bottomright'}).addTo(map);
 const markerIcon=L.divIcon({className:'terrain-marker',html:'<span></span>',iconSize:[34,34],iconAnchor:[17,17]});
 const marker=L.marker([43.3499,42.4453],{draggable:true,icon:markerIcon}).addTo(map);
 const circle=L.circle([43.3499,42.4453],{radius:10000,color:'#4b51a8',weight:1.5,opacity:.72,fillColor:'#8790d3',fillOpacity:.13}).addTo(map);
+let streamTimer=0,streamBusy=false,streamDirty=false;
 function selection(){const lat=Number($('lat').value),lon=Number($('lon').value),radius=Number($('radius').value);if(!$('lat').value||!$('lon').value||!Number.isFinite(lat)||!Number.isFinite(lon)||Math.abs(lat)>84||Math.abs(lon)>180)throw Error('Введи широту от −84 до 84 и долготу от −180 до 180.');return {lat,lon,radius};}
 function pending(){try{const s=selection();marker.setLatLng([s.lat,s.lon]);circle.setLatLng([s.lat,s.lon]).setRadius(s.radius*1000);$('coordinateLabel').innerHTML=formatCoords(s.lat,s.lon);$('status').textContent=data?'Точка выбрана. Создай кольцо, чтобы обновить рельеф.':'Точка выбрана.';}catch(e){$('status').textContent=e.message;}}
 function setPoint(lat,lon,center=true){$('lat').value=Number(lat).toFixed(4);$('lon').value=Number(lon).toFixed(4);pending();if(center)map.setView([Number(lat),Number(lon)],9);scheduleLive();}
 map.on('click',e=>setPoint(e.latlng.lat,((e.latlng.lng+540)%360-180),false));
-marker.on('drag',()=>{const p=marker.getLatLng();$('lat').value=p.lat.toFixed(4);$('lon').value=p.lng.toFixed(4);circle.setLatLng(p);$('coordinateLabel').innerHTML=formatCoords(p.lat,p.lng);clearTimeout(liveTimer);$('status').textContent='Отпусти метку — обновим рельеф.';});
-marker.on('dragend',()=>{const p=marker.getLatLng();$('lat').value=p.lat.toFixed(4);$('lon').value=p.lng.toFixed(4);pending();clearTimeout(liveTimer);load(false,true);});
+marker.on('dragstart',()=>{streamDirty=false;clearInterval(streamTimer);streamTimer=setInterval(()=>{if(!streamDirty||streamBusy)return;streamDirty=false;streamBusy=true;load(false,true).finally(()=>{streamBusy=false;});},120);});
+marker.on('drag',()=>{const p=marker.getLatLng();$('lat').value=p.lat.toFixed(4);$('lon').value=p.lng.toFixed(4);circle.setLatLng(p);$('coordinateLabel').innerHTML=formatCoords(p.lat,p.lng);clearTimeout(liveTimer);streamDirty=true;$('status').textContent=streamBusy?'Рельеф следует за меткой…':'Готовим следующий кадр рельефа…';});
+marker.on('dragend',()=>{clearInterval(streamTimer);streamTimer=0;streamDirty=false;const p=marker.getLatLng();$('lat').value=p.lat.toFixed(4);$('lon').value=p.lng.toFixed(4);pending();clearTimeout(liveTimer);load(false,true);});
 for(const id of ['lat','lon'])$(id).oninput=()=>{pending();try{const s=selection();map.panTo([s.lat,s.lon]);scheduleLive();}catch{}};
 function paintRange(input){const min=Number(input.min)||0,max=Number(input.max)||100,value=Number(input.value);input.style.setProperty('--fill',`${(value-min)/(max-min)*100}%`);}
 $('radius').oninput=()=>{$('radiusValue').value=`${$('radius').value} км`;paintRange($('radius'));pending();scheduleLive();};
@@ -209,7 +211,7 @@ deformRing();
 applyRelief();model.scale.setScalar(Number($('size').value)/100);$('stats').textContent=loaded.lat.toFixed(4)+', '+loaded.lon.toFixed(4)+' · Радиус '+loaded.radius+' км · Высоты '+Math.round(low)+'–'+Math.round(high)+' м';}
 async function load(openDetails=false,silent=false){const id=++job;let s;try{s=selection();}catch(e){$('status').textContent=e.message;return;}if(!silent)$('load').disabled=true;if(!silent)$('stageLoading').hidden=false;$('status').textContent=silent?'Обновляем рельеф…':'Загружаем настоящие высоты и создаём кольцо…';try{const result=await heights(s);await ringReady;if(id!==job)return;data=result;loaded=s;build();applyPlace();$('stageLoading').hidden=true;$('status').textContent='Кольцо обновлено. Можно продолжать выбирать точку.';if(openDetails)showStep('details');const now=selection();if(JSON.stringify(now)!==JSON.stringify(s))pending();}catch(e){if(id===job){$('stageLoading').hidden=true;$('status').textContent=`${data?'Предыдущее кольцо сохранено. ':''}Не удалось загрузить рельеф: ${e.message} Попробуй ещё раз.`;}}finally{if(id===job)$('load').disabled=false;}}
 let liveTimer;
-function scheduleLive(){if($('mapPanel').hidden)return;clearTimeout(liveTimer);$('status').textContent='Точка изменена — готовим новый рельеф…';liveTimer=setTimeout(()=>load(false,true),320);}
+function scheduleLive(){if($('mapPanel').hidden)return;clearTimeout(liveTimer);$('status').textContent='Точка изменена — готовим новый рельеф…';liveTimer=setTimeout(()=>load(false,true),100);}
 $('load').onclick=()=>{clearTimeout(liveTimer);load(true);};
 $('relief').oninput=()=>{$('reliefValue').value=`${Number($('relief').value).toFixed(1)}×`;paintRange($('relief'));applyRelief();$('status').textContent='Характер рельефа обновлён.';};
 $('size').oninput=()=>{$('sizeValue').value=`${$('size').value}%`;paintRange($('size'));model.scale.setScalar(Number($('size').value)/100);};

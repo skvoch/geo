@@ -13,5 +13,7 @@ assert.match(app,/window\.__ringTestState=ringTestState/,'runtime geometry probe
 assert.match(app,/pass<2/,'terrain detail must not be erased by excessive smoothing');
 assert.match(app,/relief\*15\.5/,'terrain contrast gain changed unexpectedly');
 assert.match(app,/subdivideTop\(child\.geometry,0\)/,'extra whole-ring subdivision must stay disabled');
+assert.match(app,/setInterval\(\(\)=>.*load\(false,true\).*120/s,'marker streaming loop is missing');
+assert.match(app,/liveTimer=setTimeout\(\(\)=>load\(false,true\),100\)/,'map click preview is not immediate');
 
 console.log('PASS: every location rebuild writes new positions into the visible mesh.');
