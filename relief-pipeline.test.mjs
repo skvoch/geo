@@ -15,5 +15,9 @@ assert.match(app,/relief\*15\.5/,'terrain contrast gain changed unexpectedly');
 assert.match(app,/subdivideTop\(child\.geometry,0\)/,'extra whole-ring subdivision must stay disabled');
 assert.match(app,/setInterval\(\(\)=>.*load\(false,true\).*120/s,'marker streaming loop is missing');
 assert.match(app,/liveTimer=setTimeout\(\(\)=>load\(false,true\),100\)/,'map click preview is not immediate');
+assert.match(app,/renderer\.setAnimationLoop\(now=>\{tickGeometrySmoothing\(now\)/,'geometry smoothing must run in the render loop');
+assert.match(app,/GEOMETRY_SMOOTH_MS=160/,'terrain transitions must stay short and responsive');
+assert.match(app,/terrainActiveIndices=Int32Array\.from\(activeIndices\)/,'only the deformable ring area should be animated');
+assert.match(app,/start\[q\]\+\(target\[q\]-start\[q\]\)\*blend/,'visible vertices must interpolate toward the next terrain');
 
-console.log('PASS: every location rebuild writes new positions into the visible mesh.');
+console.log('PASS: every location rebuild smoothly updates the visible mesh.');

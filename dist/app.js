@@ -87,7 +87,7 @@ const ringReady=new Promise((resolve,reject)=>{
 function reset(){camera.position.set(23,23,36);controls.target.set(0,2,0);controls.update();}
 reset();$('reset').onclick=reset;
 new ResizeObserver(()=>{const r=$('viewport').getBoundingClientRect();renderer.setSize(r.width,r.height);camera.aspect=r.width/r.height;camera.updateProjectionMatrix();}).observe($('viewport'));
-renderer.setAnimationLoop(()=>{controls.update();renderer.render(scene,camera);});
+renderer.setAnimationLoop(now=>{tickGeometrySmoothing(now);controls.update();renderer.render(scene,camera);});
 const map=L.map('map',{attributionControl:false,zoomControl:false}).setView([43.3499,42.4453],9);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18}).addTo(map);
 L.control.zoom({position:'bottomright'}).addTo(map);
@@ -153,11 +153,12 @@ function deformRing(){
     const terrainPositions=child.userData.terrainPositions||new Float32Array(base.length);
     const terrainNormals=child.userData.terrainNormals||new Float32Array(baseNormals.length);
     terrainPositions.fill(0);terrainNormals.fill(0);
-    const epsilon=4/N;
+    const epsilon=4/N,activeIndices=[];
     for(let i=0;i<base.length/3;i++){
       point.fromArray(base,i*3).applyMatrix4(meshToModel);
       normal.fromArray(baseNormals,i*3).applyMatrix3(normalMatrix).normalize();
       if(point.y<top-band*2.7)continue;
+      activeIndices.push(i);
       const u=point.x/halfX,v=point.z/halfZ;
       const rho=Math.pow(Math.pow(Math.abs(u),4)+Math.pow(Math.abs(v),4),.25);
       let changed=false;
@@ -187,19 +188,45 @@ function deformRing(){
     }
     child.userData.terrainPositions=terrainPositions;
     child.userData.terrainNormals=terrainNormals;
+    child.userData.terrainActiveIndices=Int32Array.from(activeIndices);
   });
 }
-let appliedRelief=null;
+let appliedRelief=null,geometrySmoothStarted=0,geometrySmoothing=false;
+const GEOMETRY_SMOOTH_MS=160;
+function tickGeometrySmoothing(now){
+  if(!geometrySmoothing||!ringBody)return;
+  const progress=Math.min(1,(now-geometrySmoothStarted)/GEOMETRY_SMOOTH_MS),blend=smooth(progress);
+  ringBody.traverse(child=>{if(!child.isMesh)return;
+    const position=child.geometry.attributes.position,active=child.userData.terrainActiveIndices;
+    const start=child.userData.smoothStartPositions,target=child.userData.smoothTargetPositions;
+    if(!active||!start||!target)return;
+    for(let k=0;k<active.length;k++){const o=active[k]*3,q=k*3;position.array[o]=start[q]+(target[q]-start[q])*blend;position.array[o+1]=start[q+1]+(target[q+1]-start[q+1])*blend;position.array[o+2]=start[q+2]+(target[q+2]-start[q+2])*blend;}
+    position.needsUpdate=true;
+  });
+  if(progress>=1){geometrySmoothing=false;publishRingTestState();}
+}
 function applyRelief(){
   const influence=Number($('relief').value)/(Number($('relief').max)||3);
+  let shouldSmooth=false;
   ringBody?.traverse(child=>{if(!child.isMesh)return;
     const position=child.geometry.attributes.position,normal=child.geometry.attributes.normal;
     const base=child.userData.basePositions,baseNormals=child.userData.baseNormals;
-    const terrainPositions=child.userData.terrainPositions,terrainNormals=child.userData.terrainNormals;
-    if(!terrainPositions||!terrainNormals)return;
-    for(let i=0;i<base.length;i++){position.array[i]=base[i]+terrainPositions[i]*influence;normal.array[i]=baseNormals[i]+terrainNormals[i]*influence;}
-    position.needsUpdate=true;normal.needsUpdate=true;
+    const terrainPositions=child.userData.terrainPositions,terrainNormals=child.userData.terrainNormals,active=child.userData.terrainActiveIndices;
+    if(!terrainPositions||!terrainNormals||!active)return;
+    if(!child.userData.hasVisibleTerrain){
+      for(let i=0;i<base.length;i++){position.array[i]=base[i]+terrainPositions[i]*influence;normal.array[i]=baseNormals[i]+terrainNormals[i]*influence;}
+      child.userData.hasVisibleTerrain=true;position.needsUpdate=true;
+    }else{
+      const length=active.length*3;
+      if(!child.userData.smoothStartPositions||child.userData.smoothStartPositions.length!==length){child.userData.smoothStartPositions=new Float32Array(length);child.userData.smoothTargetPositions=new Float32Array(length);}
+      const start=child.userData.smoothStartPositions,target=child.userData.smoothTargetPositions;
+      for(let k=0;k<active.length;k++){const o=active[k]*3,q=k*3;start[q]=position.array[o];start[q+1]=position.array[o+1];start[q+2]=position.array[o+2];target[q]=base[o]+terrainPositions[o]*influence;target[q+1]=base[o+1]+terrainPositions[o+1]*influence;target[q+2]=base[o+2]+terrainPositions[o+2]*influence;}
+      shouldSmooth=true;
+    }
+    for(let k=0;k<active.length;k++){const o=active[k]*3;normal.array[o]=baseNormals[o]+terrainNormals[o]*influence;normal.array[o+1]=baseNormals[o+1]+terrainNormals[o+1]*influence;normal.array[o+2]=baseNormals[o+2]+terrainNormals[o+2]*influence;}
+    normal.needsUpdate=true;
   });
+  if(shouldSmooth){geometrySmoothStarted=performance.now();geometrySmoothing=true;}
   appliedRelief=$('relief').value;
   publishRingTestState();
 }
