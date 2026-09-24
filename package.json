@@ -1,0 +1,8 @@
+{
+  "name": "mesto-ring-mvp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node relief-pipeline.test.mjs && node signet-check.mjs"
+  }
+}
