@@ -9,4 +9,5 @@ if(app.includes('buildTerrain'))throw Error('detached terrain overlay is still p
 if(!app.includes('const N=192')||!app.includes('subdivideTop'))throw Error('high-detail terrain pipeline is missing');
 if(!app.includes('THREE.FrontSide')||!app.includes('groups=new Map()'))throw Error('continuous ring surface pipeline is missing');
 if(!app.includes('morphAttributes.position')||!app.includes('applyRelief'))throw Error('GPU relief control is missing');
-console.log('PASS: FBX body found; the continuous mesh uses GPU morphing for instant relief control.');
+if(!app.includes("clearTimeout(liveTimer);load(true)")||!app.includes("if(!silent)$('load').disabled=true"))throw Error('interactive rebuild can still be overridden by live updates');
+console.log('PASS: FBX body found; GPU relief is instant and interactive rebuild wins over background updates.');
